@@ -1,0 +1,317 @@
+import math
+import random
+import os
+from operation import load_intial_data
+import datetime
+
+print(datetime.datetime.now())
+#######################################################################
+#                  LOAD CIRCUIT ANALYSIS
+#######################################################################
+ckt, dff_input, dff_output, dff_io_map, pi, po, ckt_dict, logic_cone, key_in_logic_cone = load_intial_data()
+count_pi = 0
+count_key = 0
+for _in in pi:
+    if _in.startswith('key'):
+        count_key = count_key + 1
+    else:
+        count_pi = count_pi + 1
+
+#######################################################################
+#                  CONSTANT VARIABLES DECLARATION
+#######################################################################
+Ni = count_pi          # No of primary inputs in circuit (M)
+Nk = count_key          # No of key inputs in circuit (S)
+No = len(po)          # No of outputs in circuit (N)
+NinData = 25     # No of different inputs to be tested (T)
+Th_hl = 6       # Thersold decided experimentally (Universal value 6)
+Pth = 1         # Probability Threshold
+
+#######################################################################
+#                       VARIABLE DECLARATION
+#######################################################################
+K_Rec = list([None] * Nk)
+TValHighKey = list()    # list of key string having high t value
+TvalHigh = list()       # list of High t value
+Tmat = list([[0.0] * No] * NinData)
+high_imp = list()
+high_imp_key = list([[]] * No)
+IPConeSearch = dict()
+Kmat = list([[0] * Nk] * NinData) # Key matrix (0 or 1)
+Imat = list([[0] * Ni] * NinData) # Input matrix (0 or 1)
+O = list([[None] * No] * NinData) # Locked Output matrix
+Oc = list([[None] * No] * NinData) # Oracle Output matrix
+Key_ResponsibleOut_Map = list([None] * Nk)
+time_oracle_ex = 10
+#######################################################################
+#                       FUNCTION DEFINITIONS
+#######################################################################
+def welch_t_test(Oc, O):
+    # Oc : Oracle Output List (T x N)
+    # O : Locked Output List (T x N)
+    # Tval : t-value for each output (1 X N)
+
+    global TvalHigh
+    global TValHighKey
+
+    mu_oracle = list()
+    mu_locked = list()
+    var_oracle = list()
+    var_locked = list()
+    Tval = list()
+    null_hypothesis = True
+
+    # Calculate mean oracle
+    for o in range(No):
+        sum_mu = 0.0
+        for i in range(NinData):
+            if Oc[i][o] == 1:
+                sum_mu = sum_mu + 1.0
+        mu_oracle.append(sum_mu / NinData)
+
+    # Calculate mean locked
+    for o in range(No):
+        sum_mu = 0.0
+        for i in range(NinData):
+            if O[i][o] == 1:
+                sum_mu = sum_mu + 1.0
+        mu_locked.append(sum_mu / NinData)
+
+    # Calculate variance oracle
+    for o in range(No):
+        sum_var = 0.0
+        for i in range(NinData):
+            sum_var = (int(Oc[i][o]) - mu_oracle[o]) * (int(Oc[i][o]) - mu_oracle[o])
+        var_oracle.append(sum_var / (NinData - 1))
+
+    # Calculate variance locked
+    for o in range(No):
+        sum_var = 0.0
+        for i in range(NinData):
+            sum_var = (int(O[i][o]) - mu_locked[o]) * (int(O[i][o]) - mu_locked[o])
+        var_locked.append(sum_var / (NinData - 1))
+
+    null_hypothesis = True
+    for o in range(No):
+        Tval.append(mu_oracle[o] - mu_locked[o])
+        if not Tval[o] == 0.0:
+            temp = math.sqrt((var_oracle[o]/NinData) + (var_locked[o]/NinData))
+            if temp == 0.0:
+                temp = temp + 0.000000001
+            Tval[o] = Tval[o] / temp
+
+#            if Tval[o] >= 4.5 or Tval[o] <= -4.5:
+#                null_hypothesis = False
+
+#    if null_hypothesis == False:
+#        TValHighKey.append(key_str)
+#        TvalHigh.append(Tval)
+
+    return Tval
+
+def get_out_to_key_map():
+    global IPConeSearch
+    for _out in po:
+        try:
+            IPConeSearch[_out] = key_in_logic_cone[dff_io_map[_out]]
+        except:
+            pass
+
+def count_one(Hk, kb):
+    global Kmat
+    count = 0
+    for K_itr in Hk:
+        if Kmat[K_itr][kb] == 1:
+            count = count + 1
+    return count
+
+def verify(Krec):
+    global Key_ResponsibleOut_Map
+    INmat = list([[0] * Ni] * NinData) # Input matrix (0 or 1)
+    verify_status = list([[False]] * Nk)
+    for k_itr in range(len(Krec)):
+        if Krec[k_itr]!=None and not verify_status[k_itr]:
+            k_r = list([random.randint(0, 1)] * Nk)
+            for k_itr2 in range(Nk):
+                if verify_status[k_itr2]:
+                    k_r[k_itr2] = Krec[k_itr2]
+            k_r[k_itr] = Krec[k_itr]
+            k_x = k_r
+            k_r[k_itr] = (Krec[k_itr] + 1) % 2
+            k_y = k_r
+            for I_itr in range(NinData):
+                for i_itr in range(Ni):
+                    INmat[I_itr][i_itr] = random.randint(0, 1)
+            # Simulate Oracle
+            Oc_x = None
+            # Simulate locked circuit
+            O_x = None
+            Tval_x = welch_t_test(Oc_x, O_x)
+            # Simulate Oracle
+            Oc_y = None
+            # Simulate locked circuit
+            O_y = None
+            Tval_y = welch_t_test(Oc_y, O_y)
+            if abs(Tval_x[Key_ResponsibleOut_Map[k_itr]]) < 4.5 and abs(Tval_y[Key_ResponsibleOut_Map[k_itr]]) >= 4.5:
+                verify_status[k_itr] = True
+            else:
+                Krec[k_itr] = None
+    return Krec
+
+def execute_verilog(arg, key):
+    arg = arg[1:]
+    f = open('./Execution/large_input.txt', 'w')
+    input_str = ''.join(str(x) for x in arg)
+    key_str = ''.join(str(x) for x in key)
+    f.write(input_str+key_str)
+    f.close()
+    os.system('iverilog -o ./Execution/large.vvp ./Execution/large.v ./Execution/large_testBench.v')
+    os.system('vvp ./Execution/large.vvp')
+    f = open('./Execution/large_output.txt', 'r')
+    lines = f.read().splitlines()
+    f.close()
+    return [int(x) for x in [*lines[-1]]]
+
+def execute_oracle(arg, time_period):
+    os.system('./Execution/large '+' '.join(str(x) for x in arg) + ' ' + str(time_period))
+    f = open('./b22_2ip_OP.txt', 'r')
+    lines = f.read().splitlines()
+    f.close()
+    return [int(x) for x in [*lines[-1]]]
+    
+#######################################################################
+#                       ALGORITHM STARTS
+#######################################################################
+get_out_to_key_map()
+end = False
+old_itr_key = None
+old_itr_status = 0
+
+f_log = open('log.txt', 'w+')
+
+while not end:
+	# Phase 1   (init Kmat)
+	Kmat = list()
+	for K_itr in range(NinData):
+		temp_row = list()
+		for k_itr in range(Nk):
+		    temp_row.append(random.randint(0, 1))
+		Kmat.append(temp_row)
+	
+	f_log.writelines('\n'+'Kmat : ')
+	f_log.writelines('\n'+str(Kmat))
+	
+	Tmat = list()
+
+	for K_itr in range(len(Kmat)):
+		f_log.writelines('\n'+'Key itr : '+str(K_itr))
+		Imat = list()
+		for I_itr in range(NinData):
+		    temp_row = list()
+		    temp_row.append(1)
+		    for i_itr in range(1, Ni):
+		        temp_row.append(random.randint(0, 1))
+		    Imat.append(temp_row)
+
+		f_log.writelines('\n'+'Imat : ')
+		f_log.writelines('\n'+str(Imat))
+	
+		# Simulate Oracle
+		Oc = list()
+		for I_itr in range(NinData):
+		    print(K_itr, I_itr)
+		    f_log.writelines('\n'+'Oracle Input itr : '+str(I_itr))
+		    Oc.append(execute_oracle(Imat[I_itr], time_oracle_ex))
+		f_log.writelines('\n'+'Oc : ')
+		f_log.writelines('\n'+str(Oc))
+		
+		# Simulate locked circuit
+		O = list()
+		for I_itr in range(NinData):
+		    f_log.writelines('\n'+'Locked Design Input itr : '+str(I_itr))
+		    O.append(execute_verilog(Imat[I_itr], Kmat[K_itr]))
+		f_log.writelines('\n'+'O : ')
+		f_log.writelines('\n'+str(O))
+		
+		Tval = welch_t_test(Oc, O)
+		f_log.writelines('\n'+'Tval : '+str(Tval))
+		
+		Tmat.append(Tval)
+	f_log.writelines('\n'+'Tmat : ')
+	f_log.writelines('\n'+str(Tmat))
+
+	# Phase 2
+	high_imp = list()
+	high_imp_key = list()
+	for o_itr in range(No):
+		Kn = list()         # key index
+		for K_itr in range(NinData):
+		    if Tmat[K_itr][o_itr] >= 4.5 or Tmat[K_itr][o_itr] <= -4.5:
+		        Kn.append(K_itr)
+		cntn = len(Kn)
+		if cntn >= Th_hl:
+		    high_imp.append(o_itr)
+		    high_imp_key.append(Kn)
+		else:
+		    high_imp_key.append(None)
+
+	f_log.writelines('\n'+'high_imp : ' + str(high_imp))
+	f_log.writelines('\n'+'high_imp_key : ' + str(high_imp_key))
+
+	# Phase 3
+	Key_ResponsibleOut_Map = list()
+	for h in high_imp:
+		try:
+		    knet = IPConeSearch['o'+str(h+1)]
+		except:
+		    continue
+		Hk = high_imp_key[h]
+		for kb in knet:
+		    kb = int(kb.replace('keyinput_',''))
+		    cnt1_kb = count_one(Hk, kb)
+		    if cnt1_kb >= Pth:
+		        K_Rec[kb] = 0
+		        Key_ResponsibleOut_Map.append(h)
+		    else:
+		        cnt0_kb = (1 - cnt1_kb)
+		        if cnt0_kb >= Pth:
+		            K_Rec[kb] = 1
+		            Key_ResponsibleOut_Map.append(h)
+		        else:
+		            Key_ResponsibleOut_Map.append(None)
+		            
+	f_log.writelines('\n'+"Key_ResponsibleOut_Map")                
+	f_log.writelines('\n'+str(Key_ResponsibleOut_Map))
+	f_log.writelines('\n'+'K_Rec Pre Verification')
+	f_log.writelines('\n'+str(K_Rec))
+
+	# Verification
+	K_Rec = verify(K_Rec)   
+
+	f_log.writelines('\n'+'K_Rec Post Verification')
+	f_log.writelines('\n'+str(K_Rec))
+
+	# Next Iteration
+	if K_Rec == old_itr_key:
+	    NinData = 2 * NinData
+	    old_itr_status = old_itr_status + 1
+	    f_log.writelines('\n'+'Same Key.')
+	    
+	else:
+		old_itr_status = 0
+		f_log.writelines('\n'+'Different Key.')
+	    
+	# Termination
+	if old_itr_status == 2:
+		end = True
+	else:
+	    end = False
+	
+	old_itr_key = K_Rec
+
+print(K_Rec)
+f_log.writelines('\n'+'Algorithm ends.')
+f_log.close()
+print(datetime.datetime.now())
+
+
